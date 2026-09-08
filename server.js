@@ -19,7 +19,7 @@ function mkCode() {
   return c;
 }
 function mkToken() { return Math.random().toString(16).slice(2, 10); }
-function memberList(room) { return [...room.members.values()].map(m => ({ pid: m.pid, name: m.name, uid: m.uid || '', av: m.av || '', offline: !m.ws })); }
+function memberList(room) { return [...room.members.values()].map(m => ({ pid: m.pid, name: m.name, uid: m.uid || '', av: m.av || '', offline: !m.ws, ready: !!m.ready })); }
 // 在其他房间查找同 uid 且在线的成员（同一账号同时只能在一个房间）
 function findOnlineByUid(uid, exceptCode) {
   if (!uid) return null;
@@ -112,10 +112,19 @@ wss.on('connection', ws => {
 
     // ---- 已入房 ----
     const room = joined.room;
+    if (m.t === 'ready') {
+      if (room.started) return;
+      if (joined.member.pid === room.hostPid) return; // 房主无需准备
+      joined.member.ready = !!m.v;
+      broadcast(room, lobbyMsg(room));
+      return;
+    }
     if (m.t === 'start') {
       if (joined.member.pid !== room.hostPid) return;
       const online = [...room.members.values()].filter(x => x.ws);
       if (online.length < 2) { send(ws, { t: 'err', msg: '至少需要2名玩家才能开始' }); return; }
+      const notReady = online.filter(x => x.pid !== room.hostPid && !x.ready);
+      if (notReady.length) { send(ws, { t: 'err', msg: '还有玩家未准备就绪' }); return; }
       room.started = true;
       broadcast(room, { t: 'starting' });
       return;
@@ -126,9 +135,9 @@ wss.on('connection', ws => {
       if (host && host.ws) send(host.ws, { t: 'act', from: joined.member.pid, a: m.a, v: m.v });
       return;
     }
-    if (m.t === 'g') { // 房主广播（特效/提示事件）
+    if (m.t === 'g') { // 房主广播（特效/提示事件）→ 包装成 {t:'g', d:...} 以匹配客户端 netMsg 处理器
       if (joined.member.pid !== room.hostPid) return;
-      broadcast(room, m.d, ws);
+      broadcast(room, { t: 'g', d: m.d }, ws);
       return;
     }
     if (m.t === 'gto') { // 房主定向消息（个性化快照 / 效果询问 / 亮牌）
