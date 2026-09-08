@@ -19,7 +19,7 @@ function mkCode() {
   return c;
 }
 function mkToken() { return Math.random().toString(16).slice(2, 10); }
-function memberList(room) { return [...room.members.values()].map(m => ({ pid: m.pid, name: m.name, uid: m.uid || '', offline: !m.ws })); }
+function memberList(room) { return [...room.members.values()].map(m => ({ pid: m.pid, name: m.name, uid: m.uid || '', av: m.av || '', offline: !m.ws })); }
 // 在其他房间查找同 uid 且在线的成员（同一账号同时只能在一个房间）
 function findOnlineByUid(uid, exceptCode) {
   if (!uid) return null;
@@ -52,10 +52,11 @@ wss.on('connection', ws => {
       if (m.t === 'create') {
         const name = String(m.name || '朋友').slice(0, 10);
         const uid = String(m.uid || '').slice(0, 64);
+        const av = String(m.av || '').slice(0, 500);
         const other = findOnlineByUid(uid, null);
         if (uid && other) { send(ws, { t: 'err', msg: '该账号已加入其他房间，请先退出原房间' }); return; }
         const room = { code: mkCode(), hostPid: 'p0', nextPid: 1, started: false, members: new Map(), created: Date.now(), lastActive: Date.now() };
-        const member = { pid: 'p0', name, uid, token: mkToken(), ws };
+        const member = { pid: 'p0', name, uid, av, token: mkToken(), ws };
         room.members.set('p0', member);
         rooms.set(room.code, room);
         joined = { room, member };
@@ -76,6 +77,7 @@ wss.on('connection', ws => {
             // 同账号掉线重连：直接回到原身份（等效 token 重连）
             dup.ws = ws;
             if (m.name) dup.name = String(m.name).slice(0, 10);
+            if (m.av != null) dup.av = String(m.av).slice(0, 500);
             joined = { room, member: dup };
             send(ws, { t: 'joined', room: room.code, pid: dup.pid, token: dup.token, host: room.hostPid, members: memberList(room), started: room.started });
             broadcast(room, lobbyMsg(room));
@@ -98,7 +100,7 @@ wss.on('connection', ws => {
         const elsewhere = findOnlineByUid(uid, code);
         if (uid && elsewhere) { send(ws, { t: 'err', msg: '该账号已在其他房间中，请先退出原房间' }); return; }
         const pid = 'p' + (room.nextPid++);
-        const member = { pid, name: String(m.name || '朋友').slice(0, 10), uid, token: mkToken(), ws };
+        const member = { pid, name: String(m.name || '朋友').slice(0, 10), uid, av: String(m.av || '').slice(0, 500), token: mkToken(), ws };
         room.members.set(pid, member);
         joined = { room, member };
         send(ws, { t: 'joined', room: room.code, pid, token: member.token, host: room.hostPid, members: memberList(room), started: false });
