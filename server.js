@@ -19,7 +19,16 @@ function mkCode() {
   return c;
 }
 function mkToken() { return Math.random().toString(16).slice(2, 10); }
-function memberList(room) { return [...room.members.values()].map(m => ({ pid: m.pid, name: m.name, offline: !m.ws })); }
+function memberList(room) { return [...room.members.values()].map(m => ({ pid: m.pid, name: m.name, uid: m.uid || '', offline: !m.ws })); }
+// 在其他房间查找同 uid 且在线的成员（同一账号同时只能在一个房间）
+function findOnlineByUid(uid, exceptCode) {
+  if (!uid) return null;
+  for (const [code, room] of rooms) {
+    if (code === exceptCode) continue;
+    for (const m of room.members.values()) if (m.uid === uid && m.ws) return { code, m };
+  }
+  return null;
+}
 function lobbyMsg(room) { return { t: 'lobby', room: room.code, host: room.hostPid, members: memberList(room) }; }
 function send(ws, data) { if (ws && ws.readyState === 1) ws.send(typeof data === 'string' ? data : JSON.stringify(data)); }
 function broadcast(room, data, exceptWs) {
@@ -42,8 +51,11 @@ wss.on('connection', ws => {
     if (!joined) {
       if (m.t === 'create') {
         const name = String(m.name || '朋友').slice(0, 10);
+        const uid = String(m.uid || '').slice(0, 64);
+        const other = findOnlineByUid(uid, null);
+        if (uid && other) { send(ws, { t: 'err', msg: '该账号已加入其他房间，请先退出原房间' }); return; }
         const room = { code: mkCode(), hostPid: 'p0', nextPid: 1, started: false, members: new Map(), created: Date.now(), lastActive: Date.now() };
-        const member = { pid: 'p0', name, token: mkToken(), ws };
+        const member = { pid: 'p0', name, uid, token: mkToken(), ws };
         room.members.set('p0', member);
         rooms.set(room.code, room);
         joined = { room, member };
@@ -55,10 +67,26 @@ wss.on('connection', ws => {
         const room = rooms.get(code);
         if (!room) { send(ws, { t: 'err', msg: '房间不存在，请核对房间码' }); return; }
         const token = String(m.token || '');
+        const uid = String(m.uid || '').slice(0, 64);
+        // 同一账号（uid）在本房间已在线：拒绝（一个页面/账号只能加入一个）
+        if (uid) {
+          const dup = [...room.members.values()].find(x => x.uid === uid);
+          if (dup) {
+            if (dup.ws) { send(ws, { t: 'err', msg: '该账号已在本房间中（一个账号只能加入一次，请勿多开页面）' }); return; }
+            // 同账号掉线重连：直接回到原身份（等效 token 重连）
+            dup.ws = ws;
+            if (m.name) dup.name = String(m.name).slice(0, 10);
+            joined = { room, member: dup };
+            send(ws, { t: 'joined', room: room.code, pid: dup.pid, token: dup.token, host: room.hostPid, members: memberList(room), started: room.started });
+            broadcast(room, lobbyMsg(room));
+            return;
+          }
+        }
         // 凭 token 重连（同一身份回到对局）
         for (const mm of room.members.values()) {
           if (token && mm.token === token && !mm.ws) {
             mm.ws = ws;
+            if (uid) mm.uid = uid;
             joined = { room, member: mm };
             send(ws, { t: 'joined', room: room.code, pid: mm.pid, token: mm.token, host: room.hostPid, members: memberList(room), started: room.started });
             broadcast(room, lobbyMsg(room));
@@ -67,8 +95,10 @@ wss.on('connection', ws => {
         }
         if (room.started) { send(ws, { t: 'err', msg: '对局已开始，只能凭原身份重连（换浏览器/清缓存后无法重入）' }); return; }
         if (room.members.size >= 8) { send(ws, { t: 'err', msg: '房间已满（最多8人）' }); return; }
+        const elsewhere = findOnlineByUid(uid, code);
+        if (uid && elsewhere) { send(ws, { t: 'err', msg: '该账号已在其他房间中，请先退出原房间' }); return; }
         const pid = 'p' + (room.nextPid++);
-        const member = { pid, name: String(m.name || '朋友').slice(0, 10), token: mkToken(), ws };
+        const member = { pid, name: String(m.name || '朋友').slice(0, 10), uid, token: mkToken(), ws };
         room.members.set(pid, member);
         joined = { room, member };
         send(ws, { t: 'joined', room: room.code, pid, token: member.token, host: room.hostPid, members: memberList(room), started: false });
