@@ -129,6 +129,12 @@ wss.on('connection', ws => {
       broadcast(room, { t: 'starting' });
       return;
     }
+    if (m.t === 'chat') { // 聊天（等待大厅 + 对局内）：广播给全房间（含发送者，用于本地回显）
+      const text = String(m.text || '').slice(0, 60);
+      if (!text.trim()) return;
+      broadcast(room, { t: 'chat', from: joined.member.pid, name: joined.member.name, text });
+      return;
+    }
     if (m.t === 'act') { // 玩家操作 → 转发给房主裁决
       if (joined.member.pid === room.hostPid) return;
       const host = room.members.get(room.hostPid);
